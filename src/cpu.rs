@@ -103,7 +103,7 @@ impl CPU {
     fn stack_address(&self) -> u16 {
         0x0100 | self.stack_pointer as u16 
     }
-    
+
     /// Pushes a byte onto the stack.
     /// Decrements `stack_pointer` after writing (stack grows downward).
     pub fn push_byte(&mut self, bus: &mut impl Bus, value: u8){
@@ -170,10 +170,10 @@ impl CPU {
     pub fn run(&mut self, bus: &mut impl Bus) {
         loop {
             // Handle interrupts before executing next instruction
-            if self.nmi_pending = false;{
+            if self.nmi_pending {
                 self.nmi_pending = false;
                 self.handle_interrupt(bus, NMI_VECTOR);
-            } else if self.irq_pending = false; {
+            } else if self.irq_pending {
                 self.irq_pending = false;
                 self.handle_interrupt(bus, IRQ_VECTOR);
             }
@@ -187,7 +187,7 @@ impl CPU {
                     self.program_counter = self.program_counter.wrapping_add(2);
                     self.register_a = value;
                     self.update_zero_and_negative_flags(self.register_a);
-                }
+                },
                 0xAD => {
                     // LDA Absolute: Load accumulator from memory address
                     let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
@@ -197,19 +197,19 @@ impl CPU {
                     self.program_counter = self.program_counter.wrapping_add(3);
                     self.register_a = value;
                     self.update_zero_and_negative_flags(self.register_a);
-                }
+                },
                 0xAA => {
                     // TAX: Transfer accumulator to X register
                     self.program_counter = self.program_counter.wrapping_add(1);
                     self.register_x = self.register_a;
                     self.update_zero_and_negative_flags(self.register_x);
-                }
+                },
                 0xE8 => {
                     // INX: Increment X register
                     self.program_counter = self.program_counter.wrapping_add(1);
                     self.register_x = self.register_x.wrapping_add(1);
                     self.update_zero_and_negative_flags(self.register_x);
-                }
+                },
                 0x8D => {
                     // STA Absolute: Store accumulator to memory address
                     let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
@@ -217,13 +217,13 @@ impl CPU {
                     let addr = (hi << 8) | lo;
                     bus.write(addr, self.register_a);
                     self.program_counter = self.program_counter.wrapping_add(3);
-                }
+                },
                 0x4C => {
                     // JMP Absolute: Jump to new address
                     let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
                     let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
                     self.program_counter = (hi << 8) | lo;
-                }
+                },
                 0xF0 => {
                     // BEQ: Branch if equal (zero flag set)
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -231,7 +231,7 @@ impl CPU {
                     if self.status & 0b0000_0010 != 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0xD0 => {
                     // BNE: Branch if not equal (zero flag clear)
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -239,7 +239,7 @@ impl CPU {
                     if self.status & 0b0000_0010 == 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0x90 => {
                     // BCC: Branch if carry clear
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -247,7 +247,7 @@ impl CPU {
                     if self.status & 0b0000_0001 == 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0xB0 => {
                     // BCS: Branch if carry set
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -255,7 +255,7 @@ impl CPU {
                     if self.status & 0b0000_0001 != 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0x30 => {
                     // BMI: Branch if negative set
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -263,7 +263,7 @@ impl CPU {
                     if self.status & 0b1000_0000 != 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0x10 => {
                     // BPL: Branch if negative clear
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
@@ -271,7 +271,7 @@ impl CPU {
                     if self.status & 0b1000_0000 == 0 {
                         self.branch(offset);
                     }
-                }
+                },
                 0x00 => {
                     // BRK: Force interrupt
                     self.program_counter = self.program_counter.wrapping_add(1);
@@ -287,7 +287,7 @@ impl CPU {
                     let lo = bus.read(IRQ_VECTOR) as u16;
                     let hi = bus.read(IRQ_VECTOR + 1) as u16;
                     self.program_counter = (hi << 8) | lo;
-                }
+                },
                 0x48 => {
                 // PHA: Push accumulator to stack
                     self.push_byte(bus, self.register_a);
@@ -311,31 +311,37 @@ impl CPU {
                 },
                 0x20 => {
                     // JSR Absolute: Jump to subroutine
-                    // Push return address (PC + 2) - 1 onto stack
+                    // - Pushes the address of the last byte of this instruction onto the stack
+                    // - Transfers PC to the target address
                     let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
                     let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
                     let target = (hi << 8) | lo;
 
-                    // Calculate return address (address of last byte of instruction)
+                    // Return address = address of last byte of JSR instruction
                     let return_addr = self.program_counter.wrapping_add(2);
 
-                    // Push high byte then low byte (6502 convention)
-                    self.push_stack(bus, (return_addr >> 8) as u8);
-                    self.push_stack(bus, (return_addr & 0xFF) as u8);
+                    // Push high byte first, then low byte
+                    self.push_byte(bus, (return_addr >> 8) as u8);
+                    self.push_byte(bus, (return_addr & 0xFF) as u8);
 
-                    // Jump PC to target
+                    // Jump to subroutine
                     self.program_counter = target;
-                    
                 },
                 0x60 => {
                     // RTS: Return from subroutine
-                    self.program_counter = self.pop_word(bus).wrapping_add(1);
+                    // - Pulls 16-bit return address from stack (low byte first)
+                    // - Adds 1 to the pulled address to resume after JSR
+                    let lo = self.pop_byte(bus) as u16;
+                    let hi = self.pop_byte(bus) as u16;
+                    let return_addr = (hi << 8) | lo;
+
+                    self.program_counter = return_addr.wrapping_add(1);
                 },
                 0x40 => {
                     // RTI: Return from interrupt
                     self.status = self.pop_byte(bus);          // Restore status flags
                     self.program_counter = self.pop_word(bus); // Restore PC
-                }
+                },
                 _ => panic!("Opcode {:#x} not implemented", opcode),
             }
         }
