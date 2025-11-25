@@ -311,12 +311,21 @@ impl CPU {
                 },
                 0x20 => {
                     // JSR Absolute: Jump to subroutine
+                    // Push return address (PC + 2) - 1 onto stack
                     let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
                     let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                    let addr = (hi << 8) | lo;
-                    // Push return address (PC + 2) onto stack
-                    self.push_word(bus, self.program_counter.wrapping_add(2));
-                    self.program_counter = addr;
+                    let target = (hi << 8) | lo;
+
+                    // Calculate return address (address of last byte of instruction)
+                    let return_addr = self.program_counter.wrapping_add(2);
+
+                    // Push high byte then low byte (6502 convention)
+                    self.push_stack(bus, (return_addr >> 8) as u8);
+                    self.push_stack(bus, (return_addr & 0xFF) as u8);
+
+                    // Jump PC to target
+                    self.program_counter = target;
+                    
                 },
                 0x60 => {
                     // RTS: Return from subroutine
