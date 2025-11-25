@@ -44,6 +44,30 @@ impl CPU {
         }
     }
     
+    /// Resets the CPU to its initial power-on state.
+    /// This simulates the 6502 RESET interrupt, which initializes
+    /// registers and loads the starting address from the RESET vector/ 
+    pub fn reset(&mut self, bus: &mut impl Bus){
+        // Program Counter is loaded from the RESET vector ($FFFC-$FFFD)
+        let lo = bus.read(0xFFFC) as u16;
+        let hi = bus.read(0xFFFD) as u16;
+        self.program_counter = (hi << 8) | lo;
+
+        // Stack pointer is initialized to 0xFD on startup
+        self.stack_pointer = 0xFD;
+
+        // Status register:
+        // Bit 2 (Interrupt Disable flag) must be set during reset
+        // Other bits are typically cleared (except unused bit 5 which is always 1)
+        self.status = 0b0011_0100; // IRQ disabled, unused flag set
+
+
+        // Registers A and X are not defined after reset on real hardware,
+        // but setting them to 0 ensures stable emulation behavior/
+        self.register_a = 0;
+        self.register_x = 0;
+    }
+
     /// Requests a maskable interrupt (IRQ). Ignored if I flag is set.
     pub fn trigger_irq(&mut self) {
         self.irq_pending = true;
