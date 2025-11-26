@@ -6,7 +6,7 @@ const IRQ_VECTOR: u16 = 0xFFFE;
 
 // Status flag bitmask (6502)
 const FLAG_NEGATIVE: u8  = 0b1000_0000;
-const FLAG_OVERFLOW: u8  = 0b1000_0000;
+const FLAG_OVERFLOW: u8  = 0b0100_0000;
 const FLAG_UNUSED: u8    = 0b0010_0000;
 const FLAG_BREAK: u8     = 0b0001_0000;
 const FLAG_DECIMAL: u8   = 0b0000_1000;
@@ -45,17 +45,25 @@ pub struct CPU {
 impl CPU { 
     /// Creates a new CPU instance with all registers and flags initialized to zero.
     pub fn new() -> Self {
-        CPU {
+        let mut cpu = CPU {
             register_a: 0,
             register_x: 0,
             status: 0,
             program_counter: 0,
-            stack_pointer: 0xFD,
-        }
+            stack_pointer: 0,
+            nmi_pending: false,
+            irq_pending: false,
+        };
+
+        // Caller MUST call reset(bus) before running, but we clear state here.
+        cpu.stack_pointer = 0xFD;
+        cpu.status = FLAG_UNUSED | FLAG_INTERRUPT; // matches reset()
+        cpu
     }
+
     
     /// Returns true if the given status flag is set.
-    fn get_flag(&mut self, flag: u8) -> bool {
+    fn get_flag(&self, flag: u8) -> bool {
         (self.status & flag) != 0
     }
 
@@ -91,8 +99,10 @@ impl CPU {
 
         // Overflow: set if sign changed unexpectedly:
         // ( (~(A ^ M) & (A ^ R)) & 0x80 ) != 0
-        let overflow = ((!(self.register_a ^ operand)) & (self.register_a ^ result) & 0x80) !=0
-    
+        let overflow = ((!(self.register_a ^ operand)) & (self.register_a ^ result) & 0x80) !=0;
+        
+        self.set_flag(FLAG_OVERFLOW, overflow);
+
         // Update Zero and Negative flags
         self.update_zero_and_negative_flags(result);
 
@@ -144,7 +154,7 @@ impl CPU {
         // Status register:
         // Bit 2 (Interrupt Disable flag) must be set during reset
         // Other bits are typically cleared (except unused bit 5 which is always 1)
-        self.status = 0b0011_0100; // IRQ disabled, unused flag set
+        self.status = FLAG_INTERRUPT | FLAG_UNUSED; // IRQ disabled, unused flag set
 
 
         // Registers A and X are not defined after reset on real hardware,
@@ -166,7 +176,7 @@ impl CPU {
         self.push_word(bus, pc);
 
         // Push status (B flag cleared on actual interrupts) 
-        let flags = self.status & 0b1110_1111; // Clear B flag
+        let flags = (self.status & !FLAG_BREAK) | FLAG_UNUSED;
         self.push_byte(bus, flags);
 
         // Set interrupt disable flag
@@ -211,6 +221,7 @@ impl CPU {
     pub fn push_word(&mut self, bus: &mut impl Bus, value: u16) {
         let high = (value >> 8) as u8;
         let low = (value & 0xFF) as u8;
+
         self.push_byte(bus, high);
         self.push_byte(bus, low);
     }
@@ -229,13 +240,13 @@ impl CPU {
     /// - Negative flag is set if the most significant bit (bit 7) is set.
     fn update_zero_and_negative_flags(&mut self, result: u8) {
         if result == 0 {
-            self.status = self.status | 0b0000_0010; // Set zero flag
+            self.status = self.status | FLAG_ZERO; // Set zero flag
         } else {
             self.status = self.status & 0b1111_1101; // Clear zero flag
         }
 
-        if result & 0b1000_0000 != 0 {
-            self.status = self.status | 0b1000_0000; // Set negative flag
+        if result & FLAG_NEGATIVE != 0 {
+            self.status = self.status | FLAG_NEGATIVE; // Set negative flag
         } else {
             self.status = self.status & 0b0111_1111; // Clear negative flag
         }
@@ -258,7 +269,7 @@ impl CPU {
             if self.nmi_pending {
                 self.nmi_pending = false;
                 self.handle_interrupt(bus, NMI_VECTOR);
-            } else if self.irq_pending {
+            } else if self.irq_pending && !self.get_flag(FLAG_INTERRUPT) {
                 self.irq_pending = false;
                 self.handle_interrupt(bus, IRQ_VECTOR);
             }
@@ -313,7 +324,7 @@ impl CPU {
                     // BEQ: Branch if equal (zero flag set)
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b0000_0010 != 0 {
+                    if self.status & FLAG_ZERO != 0 {
                         self.branch(offset);
                     }
                 },
@@ -321,7 +332,7 @@ impl CPU {
                     // BNE: Branch if not equal (zero flag clear)
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b0000_0010 == 0 {
+                    if self.status & FLAG_ZERO == 0 {
                         self.branch(offset);
                     }
                 },
@@ -329,7 +340,7 @@ impl CPU {
                     // BCC: Branch if carry clear
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b0000_0001 == 0 {
+                    if self.status & FLAG_CARRY == 0 {
                         self.branch(offset);
                     }
                 },
@@ -337,7 +348,7 @@ impl CPU {
                     // BCS: Branch if carry set
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b0000_0001 != 0 {
+                    if self.status & FLAG_CARRY != 0 {
                         self.branch(offset);
                     }
                 },
@@ -345,7 +356,7 @@ impl CPU {
                     // BMI: Branch if negative set
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b1000_0000 != 0 {
+                    if self.status & FLAG_NEGATIVE != 0 {
                         self.branch(offset);
                     }
                 },
@@ -353,7 +364,7 @@ impl CPU {
                     // BPL: Branch if negative clear
                     let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
                     self.program_counter = self.program_counter.wrapping_add(2);
-                    if self.status & 0b1000_0000 == 0 {
+                    if self.status & FLAG_NEGATIVE == 0 {
                         self.branch(offset);
                     }
                 },
@@ -363,10 +374,10 @@ impl CPU {
 
                     // Push PC and status (break flag set)
                     self.push_word(bus, self.program_counter);
-                    self.push_byte(bus, self.status | 0b0001_0000);
+                    self.push_byte(bus, self.status | FLAG_BREAK | FLAG_UNUSED);
 
-                    // Set interrupt disable
-                    self.status |= 0b0000_0100;
+                    self.set_flag(FLAG_INTERRUPT, true);
+                    self.set_flag(FLAG_BREAK, false);
 
                     // Jump to IRQ/BRK vector
                     let lo = bus.read(IRQ_VECTOR) as u16;
@@ -416,9 +427,7 @@ impl CPU {
                     // Return address = address of last byte of JSR instruction
                     let return_addr = self.program_counter.wrapping_add(2);
 
-                    // Push high byte first, then low byte
-                    self.push_byte(bus, (return_addr >> 8) as u8);
-                    self.push_byte(bus, (return_addr & 0xFF) as u8);
+                    self.push_word(bus, return_addr);
 
                     // Jump to subroutine
                     self.program_counter = target;
@@ -435,8 +444,8 @@ impl CPU {
                 },
                 0x40 => {
                     // RTI: Return from interrupt
-                    self.status = self.pop_byte(bus);          // Restore status flags
-                    self.program_counter = self.pop_word(bus); // Restore PC
+                    self.status = (self.pop_byte(bus) & 0b1100_1111) | 0b0010_0000;
+                    self.program_counter = self.pop_word(bus);
                 },
                 0x69 => {
                     // ADC - Add with Carry (immediate)
