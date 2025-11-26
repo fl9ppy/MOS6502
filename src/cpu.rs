@@ -4,6 +4,16 @@ const NMI_VECTOR: u16 = 0xFFFA;
 const RESET_VECTOR: u16 = 0xFFFC;
 const IRQ_VECTOR: u16 = 0xFFFE;
 
+// Status flag bitmask (6502)
+const FLAG_NEGATIVE: u8  = 0b1000_0000;
+const FLAG_OVERFLOW: u8  = 0b1000_0000;
+const FLAG_UNUSED: u8    = 0b0010_0000;
+const FLAG_BREAK: u8     = 0b0001_0000;
+const FLAG_DECIMAL: u8   = 0b0000_1000;
+const FLAG_INTERRUPT: u8 = 0b0000_0100;
+const FLAG_ZERO: u8      = 0b0000_0010;
+const FLAG_CARRY: u8     = 0b0000_0001;
+
 /// The CPU struct represents the central processing unit.
 /// It holds registers and status flags required for execution.
 pub struct CPU {
@@ -44,6 +54,81 @@ impl CPU {
         }
     }
     
+    /// Returns true if the given status flag is set.
+    fn get_flag(&mut self, flag: u8) -> bool {
+        (self.status & flag) != 0
+    }
+
+    /// Sets or clears a status flag depending on value.
+    fn set_flag(&mut self, flag: u8, value: bool){
+        if value {
+            self.status |= flag;
+        } else {
+            self.status &= !flag;
+        }
+    }
+
+    /// Core binary ADC operation (no BCD handling).
+    /// Adds `operand` + carry to the accumulator and updates flags.
+    /// Returns the new accumulator value (8-bit).
+    fn adc_binary(&mut self, operand: u8) -> u8 {
+        // If Decimal mode is set, we don't support it yet.
+        if self.get_flag(FLAG_DECIMAL){
+            // TODO: implement BDC mode
+            panic!("ADC in decimal (BCD) mode not implemented");
+        }
+
+        let a = self.register_a as u16;
+        let m = operand as u16;
+        let carry_in = if self.get_flag(FLAG_CARRY) { 1u16 } else { 0u16 };
+
+        let sum = a + m + carry_in; // 9-bit result possible
+
+        // Set carry flag if result exceeds 0xFF
+        self.set_flag(FLAG_CARRY, sum > 0xFF);
+
+        let result = (sum & 0xFF) as u8;
+
+        // Overflow: set if sign changed unexpectedly:
+        // ( (~(A ^ M) & (A ^ R)) & 0x80 ) != 0
+        let overflow = ((!(self.register_a ^ operand)) & (self.register_a ^ result) & 0x80) !=0
+    
+        // Update Zero and Negative flags
+        self.update_zero_and_negative_flags(result);
+
+        result
+    }
+
+    /// Core binary SBC operation (no BCD handling).
+    /// Subtracts `operand` + (1 - carry) from accumulator and updates flags.
+    /// Returns the new accumulator value (8-bit).
+    fn sbc_binary(&mut self, operand: u8) -> u8 {
+        if self.get_flag(FLAG_DECIMAL) {
+            // TODO: implement BCD SBC
+            panic!("SBC in decimal (BCD) mode not implemented");
+        }
+
+        // Implement SBC as A + (~operand) + carry
+        let inverted = (!operand) as u16;
+        let a = self.register_a as u16;
+        let carry_in = if self.get_flag(FLAG_CARRY) { 1u16 } else { 0u16 };
+
+        let sum = a + inverted + carry_in; // 9-bit result
+
+        // Carry for subtraction: if result > 0xFF then borrow didn't occur -> set carry
+        self.set_flag(FLAG_CARRY, sum > 0xFF);
+
+        let result = (sum & 0xFF) as u8;
+
+        // Overflow detection same trick as ADC when using two's complement math
+        let overflow = ((!(self.register_a ^ operand)) & (self.register_a ^ result) & 0x80) != 0;
+        self.set_flag(FLAG_OVERFLOW, overflow);
+
+        self.update_zero_and_negative_flags(result);
+
+        result
+    }
+
     /// Resets the CPU to its initial power-on state.
     /// This simulates the 6502 RESET interrupt, which initializes
     /// registers and loads the starting address from the RESET vector/ 
@@ -352,6 +437,36 @@ impl CPU {
                     // RTI: Return from interrupt
                     self.status = self.pop_byte(bus);          // Restore status flags
                     self.program_counter = self.pop_word(bus); // Restore PC
+                },
+                0x69 => {
+                    // ADC - Add with Carry (immediate)
+                    let operand = bus.read(self.program_counter.wrapping_add(1));
+                    self.program_counter = self.program_counter.wrapping_add(2);
+                    self.register_a = self.adc_binary(operand);
+                },
+                0x6D => {
+                    // ADC - Add with Carry (absolute)
+                    let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+                    let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+                    let addr = (hi << 8) | lo;
+                    let operand = bus.read(addr);
+                    self.program_counter = self.program_counter.wrapping_add(3);
+                    self.register_a = self.adc_binary(operand);
+                },
+                0xE9 => {
+                    // SBC - Subtract with Borrow (immediate)
+                    let operand = bus.read(self.program_counter.wrapping_add(1));
+                    self.program_counter = self.program_counter.wrapping_add(2);
+                    self.register_a = self.sbc_binary(operand);
+                },
+                0xED => {
+                    // SBC - Subtract with Borrow (absolute)
+                    let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+                    let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+                    let addr = (hi << 8) | lo;
+                    let operand = bus.read(addr);
+                    self.program_counter = self.program_counter.wrapping_add(3);
+                    self.register_a = self.sbc_binary(operand);
                 },
                 _ => panic!("Opcode {:#x} not implemented", opcode),
             }
