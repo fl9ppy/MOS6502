@@ -296,17 +296,28 @@ impl CPU {
                 0x68 => {
                     // PLA: Pull accumulator from stack
                     self.register_a = self.pop_byte(bus);
+
+                    // Update Z and N based on new accumulator value
                     self.update_zero_and_negative_flags(self.register_a);
                     self.program_counter = self.program_counter.wrapping_add(1);
                 },
                 0x08 => {
-                    // PHP: Push processor status to stack (set B flag + unused)
-                    self.push_byte(bus, self.status | 0b0011_0000);
+                    // PHP: Push processor status onto the stack
+                    //
+                    // On the real 6502, the B flag (bit 4) and "unused" flag (bit 5)
+                    // are *always forced to 1* when pushing status.
+                    let flags = self.status | 0b0011_0000;
+                    self.push_byte(bus, flags);
                     self.program_counter = self.program_counter.wrapping_add(1);
                 },
                 0x28 => {
-                    // PLP: Pull processor status from stack
-                    self.status = self.pop_byte(bus);
+                    // PLP: Pull processor status from the stack
+                    //
+                    // After pulling, the 6502 forces:
+                    // - Bit 5 (unused) to 1
+                    // - Bit 4 (break flag) to 0 inside the CPU
+                    let value = self.pop_byte(bus);
+                    self.status = (value & 0b1100_1111) | 0b0010_0000;
                     self.program_counter = self.program_counter.wrapping_add(1);
                 },
                 0x20 => {
