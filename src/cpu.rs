@@ -14,14 +14,29 @@ const FLAG_INTERRUPT: u8 = 0b0000_0100;
 const FLAG_ZERO: u8 = 0b0000_0010;
 const FLAG_CARRY: u8 = 0b0000_0001;
 
+/// Represents an operand fetched by an addressing mode helper.
+#[derive(Debug, Clone, Copy)]
+enum Operand {
+    /// Immediate value (value already resolved)
+    Immediate(u8),
+
+    /// Memory address (for reads or writes)
+    Address(u16),
+
+    /// Accumulator implicit operand (for instructions that operate on A)
+    Accumulator,
+}
+
 /// The CPU struct represents the central processing unit.
-/// It holds registers and status flags required for execution.
 pub struct CPU {
     /// Accumulator register (A), used for arithmetic and logic operations.
     pub register_a: u8,
 
     /// Index register X, used for indexing and loop counters.
     pub register_x: u8,
+
+    /// Index register Y (not present previously) — add it now for addressing modes.
+    pub register_y: u8,
 
     /// Status register holding CPU flags:
     /// - Bit 7: Negative flag (N)
@@ -40,6 +55,9 @@ pub struct CPU {
     /// Pending interrupt requests (NMI cannot be masked, IRQ can be).
     pub nmi_pending: bool,
     pub irq_pending: bool,
+
+    /// Accumulated CPU cycles executed (host-side counter for emulation timing)
+    pub cycles: u64,
 }
 
 impl CPU {
@@ -48,11 +66,13 @@ impl CPU {
         let mut cpu = CPU {
             register_a: 0,
             register_x: 0,
+            register_y: 0,
             status: 0,
             program_counter: 0,
             stack_pointer: 0,
             nmi_pending: false,
             irq_pending: false,
+            cycles: 0,
         };
 
         // Caller MUST call reset(bus) before running, but we clear state here.
@@ -87,7 +107,11 @@ impl CPU {
 
         let a = self.register_a as u16;
         let m = operand as u16;
-        let carry_in = if self.get_flag(FLAG_CARRY) { 1u16 } else { 0u16 };
+        let carry_in = if self.get_flag(FLAG_CARRY) {
+            1u16
+        } else {
+            0u16
+        };
 
         let sum = a + m + carry_in; // 9-bit result possible
 
@@ -120,7 +144,11 @@ impl CPU {
         // Implement SBC as A + (~operand) + carry
         let inverted = !operand as u16;
         let a = self.register_a as u16;
-        let carry_in = if self.get_flag(FLAG_CARRY) { 1u16 } else { 0u16 };
+        let carry_in = if self.get_flag(FLAG_CARRY) {
+            1u16
+        } else {
+            0u16
+        };
 
         let sum = a + inverted + carry_in; // 9-bit result
 
@@ -144,7 +172,7 @@ impl CPU {
     pub fn reset(&mut self, bus: &mut impl Bus) {
         // Program Counter is loaded from the RESET vector ($FFFC-$FFFD)
         let lo = bus.read(RESET_VECTOR) as u16;
-        let hi = bus.read(0xfffd) as u16;
+        let hi = bus.read(RESET_VECTOR + 1) as u16;
         self.program_counter = (hi << 8) | lo;
 
         // Stack pointer is initialized to 0xFD on startup
@@ -159,6 +187,7 @@ impl CPU {
         // but setting them to 0 ensures stable emulation behavior/
         self.register_a = 0;
         self.register_x = 0;
+        self.register_y = 0;
     }
 
     #[allow(dead_code)]
@@ -242,15 +271,15 @@ impl CPU {
     /// - Negative flag is set if the most significant bit (bit 7) is set.
     fn update_zero_and_negative_flags(&mut self, result: u8) {
         if result == 0 {
-            self.status = self.status | FLAG_ZERO; // Set zero flag
+            self.status |= FLAG_ZERO; // Set zero flag
         } else {
-            self.status = self.status & 0b1111_1101; // Clear zero flag
+            self.status &= !FLAG_ZERO; // Clear zero flag
         }
 
         if (result & FLAG_NEGATIVE) != 0 {
-            self.status = self.status | FLAG_NEGATIVE; // Set negative flag
+            self.status |= FLAG_NEGATIVE; // Set negative flag
         } else {
-            self.status = self.status & 0b0111_1111; // Clear negative flag
+            self.status &= !FLAG_NEGATIVE; // Clear negative flag
         }
     }
 
@@ -261,11 +290,171 @@ impl CPU {
         self.program_counter = (pc + offset) as u16;
     }
 
-    #[allow(dead_code)]
+    //
+    // ---- Addressing mode helpers ----
+    //
+    // Each helper fetches/decodes the operand according to the addressing mode,
+    // advances the program counter appropriately, and returns an Operand.
+    // Some functions return `page_crossed` which is useful later for cycle accounting.
+    //
+
+    /// Read a little-endian 16-bit value from memory at `addr` (lo then hi).
+    fn read_u16(&self, bus: &impl Bus, addr: u16) -> u16 {
+        let lo = bus.read(addr) as u16;
+        let hi = bus.read(addr.wrapping_add(1)) as u16;
+        (hi << 8) | lo
+    }
+
+    /// Immediate: operand is the next byte. PC advances by 2.
+    fn fetch_immediate(&mut self, bus: &impl Bus) -> Operand {
+        let value = bus.read(self.program_counter.wrapping_add(1));
+        self.program_counter = self.program_counter.wrapping_add(2);
+        Operand::Immediate(value)
+    }
+
+    /// Implied / accumulator: no operand bytes (PC +1)
+    fn fetch_implied(&mut self) -> Operand {
+        self.program_counter = self.program_counter.wrapping_add(1);
+        Operand::Accumulator
+    }
+
+    /// Zero Page: single byte address in page $00. PC +2.
+    fn fetch_zeropage(&mut self, bus: &impl Bus) -> Operand {
+        let addr = bus.read(self.program_counter.wrapping_add(1)) as u16;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        Operand::Address(addr & 0x00ff)
+    }
+
+    /// Zero Page,X: zero page address + X, wraps within zero page. PC +2.
+    fn fetch_zeropage_x(&mut self, bus: &impl Bus) -> Operand {
+        let base = bus.read(self.program_counter.wrapping_add(1)) as u8;
+        let addr = base.wrapping_add(self.register_x) as u16;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        Operand::Address(addr as u16 & 0x00ff)
+    }
+
+    /// Zero Page,Y: zero page address + Y, wraps within zero page. PC +2.
+    fn fetch_zeropage_y(&mut self, bus: &impl Bus) -> Operand {
+        let base = bus.read(self.program_counter.wrapping_add(1)) as u8;
+        let addr = base.wrapping_add(self.register_y) as u16;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        Operand::Address(addr as u16 & 0x00ff)
+    }
+
+    /// Absolute: 16-bit address (lo/hi). PC +3.
+    fn fetch_absolute(&mut self, bus: &impl Bus) -> Operand {
+        let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+        let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+        let addr = (hi << 8) | lo;
+        self.program_counter = self.program_counter.wrapping_add(3);
+        Operand::Address(addr)
+    }
+
+    /// Absolute,X: absolute + X. Returns operand and `page_crossed` flag. PC +3.
+    fn fetch_absolute_x(&mut self, bus: &impl Bus) -> (Operand, bool) {
+        let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+        let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+        let base = (hi << 8) | lo;
+        let addr = base.wrapping_add(self.register_x as u16);
+        let page_crossed = (base & 0xff00) != (addr & 0xff00);
+        self.program_counter = self.program_counter.wrapping_add(3);
+        (Operand::Address(addr), page_crossed)
+    }
+
+    /// Absolute,Y: absolute + Y. Returns operand and `page_crossed` flag. PC +3.
+    fn fetch_absolute_y(&mut self, bus: &impl Bus) -> (Operand, bool) {
+        let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+        let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+        let base = (hi << 8) | lo;
+        let addr = base.wrapping_add(self.register_y as u16);
+        let page_crossed = (base & 0xff00) != (addr & 0xff00);
+        self.program_counter = self.program_counter.wrapping_add(3);
+        (Operand::Address(addr), page_crossed)
+    }
+
+    /// (Indirect,X) - "Indexed Indirect"
+    /// Effective address = read16((zp + X) & 0xFF)
+    /// PC +2.
+    fn fetch_indexed_indirect(&mut self, bus: &impl Bus) -> Operand {
+        let zp = bus.read(self.program_counter.wrapping_add(1));
+        let ptr = zp.wrapping_add(self.register_x) as u16 & 0x00ff;
+        // zero page wrap for pointer low/high
+        let lo = bus.read(ptr) as u16;
+        let hi = bus.read((ptr.wrapping_add(1) & 0x00ff)) as u16;
+        let addr = (hi << 8) | lo;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        Operand::Address(addr)
+    }
+
+    /// (Indirect),Y - "Indirect Indexed"
+    /// Effective address = read16(zp) + Y
+    /// Returns operand and page_cross flag; PC +2.
+    fn fetch_indirect_indexed(&mut self, bus: &impl Bus) -> (Operand, bool) {
+        let zp = bus.read(self.program_counter.wrapping_add(1)) as u16 & 0x00ff;
+        let lo = bus.read(zp) as u16;
+        let hi = bus.read((zp.wrapping_add(1) & 0x00ff)) as u16;
+        let base = (hi << 8) | lo;
+        let addr = base.wrapping_add(self.register_y as u16);
+        let page_crossed = (base & 0xff00) != (addr & 0xff00);
+        self.program_counter = self.program_counter.wrapping_add(2);
+        (Operand::Address(addr), page_crossed)
+    }
+
+    /// Indirect addressing used by JMP (indirect). Implements the 6502 page-boundary bug:
+    /// If the indirect vector falls on a page boundary (xxFF), the high byte is fetched from xx00 instead of xx+1 00.
+    fn fetch_indirect_jmp(&mut self, bus: &impl Bus) -> Operand {
+        let ptr_lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
+        let ptr_hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
+        let ptr = (ptr_hi << 8) | ptr_lo;
+
+        // 6502 bug: if low byte is 0xFF, the high byte wraps within same page
+        let lo = bus.read(ptr) as u16;
+        let hi_addr = if (ptr & 0x00ff) == 0x00ff {
+            // wrap within page
+            (ptr & 0xff00)
+        } else {
+            ptr.wrapping_add(1)
+        };
+        let hi = bus.read(hi_addr) as u16;
+        let addr = (hi << 8) | lo;
+        self.program_counter = self.program_counter.wrapping_add(3);
+        Operand::Address(addr)
+    }
+
+    /// Relative addressing: used by branch instructions; fetch signed offset and advance PC by 2.
+    fn fetch_relative_offset(&mut self, bus: &impl Bus) -> i8 {
+        let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        offset
+    }
+
+    //
+    // ---- End addressing helpers ----
+    //
+
+    /// Adds cycles for branches: +1 when taken, +1 additional if page crossed.
+    /// Assumes PC has already been advanced past the branch operand (i.e., after fetch_relative_offset).
+    fn branch_with_cycles(&mut self, offset: i8) {
+        // old_pc is the PC *after* the operand (this matches your fetch_relative_offset behavior)
+        let old_pc = self.program_counter;
+        // compute new PC by adding signed offset
+        let new_pc = (old_pc as i32 + offset as i32) as u16;
+
+        // set PC to new location
+        self.program_counter = new_pc;
+
+        // branch taken: +1 cycle
+        self.cycles = self.cycles.wrapping_add(1);
+
+        // if page crossed, add another cycle
+        let crossed = (old_pc & 0xff00) != (new_pc & 0xff00);
+        if crossed {
+            self.cycles = self.cycles.wrapping_add(1);
+        }
+    }
 
     /// Runs the CPU emulation loop, fetching and executing instructions from the bus.
     /// The loop continues until a BRK (0x00) instruction is encountered.
-    ///
     /// The CPU reads instructions from memory via the Bus trait interface.
     pub fn run(&mut self, bus: &mut impl Bus) {
         loop {
@@ -289,97 +478,163 @@ impl CPU {
         match opcode {
             0xa9 => {
                 // LDA Immediate: Load accumulator with immediate value
-                let value = bus.read(self.program_counter.wrapping_add(1));
-                self.program_counter = self.program_counter.wrapping_add(2);
-                self.register_a = value;
-                self.update_zero_and_negative_flags(self.register_a);
+                if let Operand::Immediate(value) = self.fetch_immediate(bus) {
+                    self.register_a = value;
+                    self.update_zero_and_negative_flags(self.register_a);
+                } else {
+                    unreachable!();
+                }
+            }
+            0xa5 => {
+                // LDA Zero Page
+                if let Operand::Address(addr) = self.fetch_zeropage(bus) {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+            }
+            0xb5 => {
+                // LDA Zero Page,X
+                if let Operand::Address(addr) = self.fetch_zeropage_x(bus) {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
             }
             0xad => {
-                // LDA Absolute: Load accumulator from memory address
-                let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
-                let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                let addr = (hi << 8) | lo;
-                let value = bus.read(addr);
-                self.program_counter = self.program_counter.wrapping_add(3);
-                self.register_a = value;
-                self.update_zero_and_negative_flags(self.register_a);
+                // LDA Absolute
+                if let Operand::Address(addr) = self.fetch_absolute(bus) {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+            }
+            0xbd => {
+                // LDA Absolute,X
+                let (op, page_crossed) = self.fetch_absolute_x(bus);
+                if let Operand::Address(addr) = op {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+                // page-cross penalty if accessed across page boundary
+                if page_crossed {
+                    self.cycles = self.cycles.wrapping_add(1);
+                }
+            }
+            0xb9 => {
+                // LDA Absolute,Y
+                let (op, page_crossed) = self.fetch_absolute_y(bus);
+                if let Operand::Address(addr) = op {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+                if page_crossed {
+                    self.cycles = self.cycles.wrapping_add(1);
+                }
+            }
+            0xa1 => {
+                // LDA (Indirect,X)
+                if let Operand::Address(addr) = self.fetch_indexed_indirect(bus) {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+            }
+            0xb1 => {
+                // LDA (Indirect),Y
+                let (op, page_crossed) = self.fetch_indirect_indexed(bus);
+                if let Operand::Address(addr) = op {
+                    self.register_a = bus.read(addr);
+                    self.update_zero_and_negative_flags(self.register_a);
+                }
+                if page_crossed {
+                    self.cycles = self.cycles.wrapping_add(1);
+                }
             }
             0xaa => {
-                // TAX: Transfer accumulator to X register
-                self.program_counter = self.program_counter.wrapping_add(1);
+                // TAX: Transfer accumulator to X register (implied)
+                self.fetch_implied(); // advance PC
                 self.register_x = self.register_a;
                 self.update_zero_and_negative_flags(self.register_x);
             }
             0xe8 => {
-                // INX: Increment X register
-                self.program_counter = self.program_counter.wrapping_add(1);
+                // INX: Increment X register (implied)
+                self.fetch_implied();
                 self.register_x = self.register_x.wrapping_add(1);
                 self.update_zero_and_negative_flags(self.register_x);
             }
             0x8d => {
                 // STA Absolute: Store accumulator to memory address
-                let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
-                let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                let addr = (hi << 8) | lo;
-                bus.write(addr, self.register_a);
-                self.program_counter = self.program_counter.wrapping_add(3);
+                if let Operand::Address(addr) = self.fetch_absolute(bus) {
+                    bus.write(addr, self.register_a);
+                }
+            }
+            0x85 => {
+                // STA Zero Page
+                if let Operand::Address(addr) = self.fetch_zeropage(bus) {
+                    bus.write(addr, self.register_a);
+                }
+            }
+            0x95 => {
+                // STA Zero Page,X
+                if let Operand::Address(addr) = self.fetch_zeropage_x(bus) {
+                    bus.write(addr, self.register_a);
+                }
             }
             0x4c => {
                 // JMP Absolute: Jump to new address
-                let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
-                let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                self.program_counter = (hi << 8) | lo;
+                if let Operand::Address(addr) = self.fetch_absolute(bus) {
+                    self.program_counter = addr;
+                }
+            }
+            0x6c => {
+                // JMP Indirect
+                if let Operand::Address(addr) = self.fetch_indirect_jmp(bus) {
+                    self.program_counter = addr;
+                }
             }
             0xf0 => {
                 // BEQ: Branch if equal (zero flag set)
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_ZERO) != 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if self.get_flag(FLAG_ZERO) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0xd0 => {
                 // BNE: Branch if not equal (zero flag clear)
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_ZERO) == 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if !self.get_flag(FLAG_ZERO) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0x90 => {
                 // BCC: Branch if carry clear
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_CARRY) == 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if !self.get_flag(FLAG_CARRY) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0xb0 => {
                 // BCS: Branch if carry set
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_CARRY) != 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if self.get_flag(FLAG_CARRY) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0x30 => {
                 // BMI: Branch if negative set
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_NEGATIVE) != 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if self.get_flag(FLAG_NEGATIVE) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0x10 => {
                 // BPL: Branch if negative clear
-                let offset = bus.read(self.program_counter.wrapping_add(1)) as i8;
-                self.program_counter = self.program_counter.wrapping_add(2);
-                if (self.status & FLAG_NEGATIVE) == 0 {
-                    self.branch(offset);
+                let offset = self.fetch_relative_offset(bus);
+                if !self.get_flag(FLAG_NEGATIVE) {
+                    self.branch_with_cycles(offset);
                 }
             }
             0x00 => {
                 // BRK: Force interrupt
+                // On BRK the return address pushed is PC+2 and break flag is set for pushed flags.
+                // We emulate the basic behavior here.
                 self.program_counter = self.program_counter.wrapping_add(1);
 
                 // Push PC and status (break flag set)
@@ -398,40 +653,29 @@ impl CPU {
             }
             0x48 => {
                 // PHA: Push accumulator to stack
+                self.fetch_implied();
                 self.push_byte(bus, self.register_a);
-                self.program_counter = self.program_counter.wrapping_add(1);
             }
             0x68 => {
                 // PLA: Pull accumulator from stack
+                self.fetch_implied();
                 self.register_a = self.pop_byte(bus);
-
-                // Update Z and N based on new accumulator value
                 self.update_zero_and_negative_flags(self.register_a);
-                self.program_counter = self.program_counter.wrapping_add(1);
             }
             0x08 => {
                 // PHP: Push processor status onto the stack
-                //
-                // On the real 6502, the B flag (bit 4) and "unused" flag (bit 5)
-                // are *always forced to 1* when pushing status.
                 let flags = self.status | 0b0011_0000;
                 self.push_byte(bus, flags);
                 self.program_counter = self.program_counter.wrapping_add(1);
             }
             0x28 => {
                 // PLP: Pull processor status from the stack
-                //
-                // After pulling, the 6502 forces:
-                // - Bit 5 (unused) to 1
-                // - Bit 4 (break flag) to 0 inside the CPU
                 let value = self.pop_byte(bus);
                 self.status = (value & 0b1100_1111) | 0b0010_0000;
                 self.program_counter = self.program_counter.wrapping_add(1);
             }
             0x20 => {
                 // JSR Absolute: Jump to subroutine
-                // - Pushes the address of the last byte of this instruction onto the stack
-                // - Transfers PC to the target address
                 let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
                 let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
                 let target = (hi << 8) | lo;
@@ -446,8 +690,6 @@ impl CPU {
             }
             0x60 => {
                 // RTS: Return from subroutine
-                // - Pulls 16-bit return address from stack (low byte first)
-                // - Adds 1 to the pulled address to resume after JSR
                 let lo = self.pop_byte(bus) as u16;
                 let hi = self.pop_byte(bus) as u16;
                 let return_addr = (hi << 8) | lo;
@@ -461,33 +703,43 @@ impl CPU {
             }
             0x69 => {
                 // ADC - Add with Carry (immediate)
-                let operand = bus.read(self.program_counter.wrapping_add(1));
-                self.program_counter = self.program_counter.wrapping_add(2);
-                self.register_a = self.adc_binary(operand);
+                if let Operand::Immediate(operand) = self.fetch_immediate(bus) {
+                    self.register_a = self.adc_binary(operand);
+                }
             }
             0x6d => {
                 // ADC - Add with Carry (absolute)
-                let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
-                let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                let addr = (hi << 8) | lo;
-                let operand = bus.read(addr);
-                self.program_counter = self.program_counter.wrapping_add(3);
-                self.register_a = self.adc_binary(operand);
+                if let Operand::Address(addr) = self.fetch_absolute(bus) {
+                    let operand = bus.read(addr);
+                    self.register_a = self.adc_binary(operand);
+                }
+            }
+            0x65 => {
+                // ADC - Add with Carry (Zero Page)
+                if let Operand::Address(addr) = self.fetch_zeropage(bus) {
+                    let operand = bus.read(addr);
+                    self.register_a = self.adc_binary(operand);
+                }
+            }
+            0x75 => {
+                // ADC - Add with Carry (Zero Page,X)
+                if let Operand::Address(addr) = self.fetch_zeropage_x(bus) {
+                    let operand = bus.read(addr);
+                    self.register_a = self.adc_binary(operand);
+                }
             }
             0xe9 => {
                 // SBC - Subtract with Borrow (immediate)
-                let operand = bus.read(self.program_counter.wrapping_add(1));
-                self.program_counter = self.program_counter.wrapping_add(2);
-                self.register_a = self.sbc_binary(operand);
+                if let Operand::Immediate(operand) = self.fetch_immediate(bus) {
+                    self.register_a = self.sbc_binary(operand);
+                }
             }
             0xed => {
                 // SBC - Subtract with Borrow (absolute)
-                let lo = bus.read(self.program_counter.wrapping_add(1)) as u16;
-                let hi = bus.read(self.program_counter.wrapping_add(2)) as u16;
-                let addr = (hi << 8) | lo;
-                let operand = bus.read(addr);
-                self.program_counter = self.program_counter.wrapping_add(3);
-                self.register_a = self.sbc_binary(operand);
+                if let Operand::Address(addr) = self.fetch_absolute(bus) {
+                    let operand = bus.read(addr);
+                    self.register_a = self.sbc_binary(operand);
+                }
             }
             _ => panic!("Opcode {:#x} not implemented", opcode),
         }
