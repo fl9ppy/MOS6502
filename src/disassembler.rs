@@ -1,6 +1,7 @@
 use crate::bus::Bus;
 
-#[derive(Clone, Copy)]
+/// Addressing modes used by the 6502
+#[derive(Clone, Copy, Debug)]
 pub enum AddrMode {
     Imp,
     Acc,
@@ -17,6 +18,8 @@ pub enum AddrMode {
     Rel,
 }
 
+/// A compact description of each opcode
+#[derive(Clone, Copy)]
 pub struct OpcodeInfo {
     pub mnemonic: &'static str,
     pub mode: AddrMode,
@@ -1720,6 +1723,402 @@ pub const OPCODES: [OpcodeInfo; 256] = [
         size: 3,
         illegal: true,
     }, // BF
+    // ---------------------------
+    // 0xC0–0xCF
+    // ---------------------------
+    OpcodeEntry {
+        mnemonic: "CPY",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: false,
+    }, // C0
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::IndirectX,
+        size: 2,
+        illegal: false,
+    }, // C1
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // C2
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::IndirectX,
+        size: 2,
+        illegal: true,
+    }, // C3
+    OpcodeEntry {
+        mnemonic: "CPY",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // C4
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // C5
+    OpcodeEntry {
+        mnemonic: "DEC",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // C6
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: true,
+    }, // C7
+    OpcodeEntry {
+        mnemonic: "INY",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: false,
+    }, // C8
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: false,
+    }, // C9
+    OpcodeEntry {
+        mnemonic: "DEX",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: false,
+    }, // CA
+    OpcodeEntry {
+        mnemonic: "AXS",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // CB
+    OpcodeEntry {
+        mnemonic: "CPY",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // CC
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // CD
+    OpcodeEntry {
+        mnemonic: "DEC",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // CE
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: true,
+    }, // CF
+    // ---------------------------
+    // 0xD0–0xDF
+    // ---------------------------
+    OpcodeEntry {
+        mnemonic: "BNE",
+        mode: AddressingMode::Relative,
+        size: 2,
+        illegal: false,
+    }, // D0
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::IndirectY,
+        size: 2,
+        illegal: false,
+    }, // D1
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // D2
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::IndirectY,
+        size: 2,
+        illegal: true,
+    }, // D3
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: true,
+    }, // D4
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: false,
+    }, // D5
+    OpcodeEntry {
+        mnemonic: "DEC",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: false,
+    }, // D6
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: true,
+    }, // D7
+    OpcodeEntry {
+        mnemonic: "CLD",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: false,
+    }, // D8
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::AbsoluteY,
+        size: 3,
+        illegal: false,
+    }, // D9
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: true,
+    }, // DA
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::AbsoluteY,
+        size: 3,
+        illegal: true,
+    }, // DB
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: true,
+    }, // DC
+    OpcodeEntry {
+        mnemonic: "CMP",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: false,
+    }, // DD
+    OpcodeEntry {
+        mnemonic: "DEC",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: false,
+    }, // DE
+    OpcodeEntry {
+        mnemonic: "DCP",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: true,
+    }, // DF
+    // ---------------------------
+    // 0xE0–0xEF
+    // ---------------------------
+    OpcodeEntry {
+        mnemonic: "CPX",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: false,
+    }, // E0
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::IndirectX,
+        size: 2,
+        illegal: false,
+    }, // E1
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // E2
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::IndirectX,
+        size: 2,
+        illegal: true,
+    }, // E3
+    OpcodeEntry {
+        mnemonic: "CPX",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // E4
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // E5
+    OpcodeEntry {
+        mnemonic: "INC",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: false,
+    }, // E6
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::ZeroPage,
+        size: 2,
+        illegal: true,
+    }, // E7
+    OpcodeEntry {
+        mnemonic: "INX",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: false,
+    }, // E8
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: false,
+    }, // E9
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: true,
+    }, // EA (NOP official)
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // EB (SBC unofficial)
+    OpcodeEntry {
+        mnemonic: "CPX",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // EC
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // ED
+    OpcodeEntry {
+        mnemonic: "INC",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: false,
+    }, // EE
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::Absolute,
+        size: 3,
+        illegal: true,
+    }, // EF
+    // ---------------------------
+    // 0xF0–0xFF
+    // ---------------------------
+    OpcodeEntry {
+        mnemonic: "BEQ",
+        mode: AddressingMode::Relative,
+        size: 2,
+        illegal: false,
+    }, // F0
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::IndirectY,
+        size: 2,
+        illegal: false,
+    }, // F1
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Immediate,
+        size: 2,
+        illegal: true,
+    }, // F2
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::IndirectY,
+        size: 2,
+        illegal: true,
+    }, // F3
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: true,
+    }, // F4
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: false,
+    }, // F5
+    OpcodeEntry {
+        mnemonic: "INC",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: false,
+    }, // F6
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::ZeroPageX,
+        size: 2,
+        illegal: true,
+    }, // F7
+    OpcodeEntry {
+        mnemonic: "SED",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: false,
+    }, // F8
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::AbsoluteY,
+        size: 3,
+        illegal: false,
+    }, // F9
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::Implied,
+        size: 1,
+        illegal: true,
+    }, // FA
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::AbsoluteY,
+        size: 3,
+        illegal: true,
+    }, // FB
+    OpcodeEntry {
+        mnemonic: "NOP",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: true,
+    }, // FC
+    OpcodeEntry {
+        mnemonic: "SBC",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: false,
+    }, // FD
+    OpcodeEntry {
+        mnemonic: "INC",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: false,
+    }, // FE
+    OpcodeEntry {
+        mnemonic: "ISC",
+        mode: AddressingMode::AbsoluteX,
+        size: 3,
+        illegal: true,
+    }, // FF
 ];
 
 fn format_operand(mode: AddrMode, bytes: &[u8]) -> String {
@@ -1744,27 +2143,93 @@ fn format_operand(mode: AddrMode, bytes: &[u8]) -> String {
     }
 }
 
-pub fn disassemble(bus: &impl Bus, pc: u16) -> String {
-    let opcode = bus.read(pc);
-    let info = &OPCODES[opcode as usize];
+/// A fully decoded instruction
+pub struct Disassembled {
+    pub addr: u16,
+    pub bytes: Vec<u8>,
+    pub mnemonic: String,
+    pub operand: String,
+    pub size: u8,
+    pub next_pc: u16,
+}
 
-    let mut bytes = vec![opcode];
-    for i in 1..info.size {
-        bytes.push(bus.read(pc.wrapping_add(i as u16)));
+impl Disassembled {
+    pub fn pretty(&self) -> String {
+        let mut b = String::new();
+        for byte in &self.bytes {
+            b.push_str(&format!("{:02X} ", byte));
+        }
+
+        format!(
+            "{:04X}  {:<9}  {:<3} {}",
+            self.addr, b, self.mnemonic, self.operand
+        )
+    }
+}
+
+/// Formats operands according to addressing mode
+fn fmt_operand(bus: &impl Bus, pc: u16, info: &OpcodeInfo) -> String {
+    match info.mode {
+        AddrMode::Imp => "".into(),
+        AddrMode::Acc => "A".into(),
+        AddrMode::Imm => format!("#${:02X}", bus.read(pc + 1)),
+        AddrMode::Zp => format!("${:02X}", bus.read(pc + 1)),
+        AddrMode::ZpX => format!("${:02X},X", bus.read(pc + 1)),
+        AddrMode::ZpY => format!("${:02X},Y", bus.read(pc + 1)),
+        AddrMode::Abs => {
+            let lo = bus.read(pc + 1) as u16;
+            let hi = bus.read(pc + 2) as u16;
+            format!("${:04X}", (hi << 8) | lo)
+        }
+        AddrMode::AbsX => {
+            let lo = bus.read(pc + 1) as u16;
+            let hi = bus.read(pc + 2) as u16;
+            format!("${:04X},X", (hi << 8) | lo)
+        }
+        AddrMode::AbsY => {
+            let lo = bus.read(pc + 1) as u16;
+            let hi = bus.read(pc + 2) as u16;
+            format!("${:04X},Y", (hi << 8) | lo)
+        }
+        AddrMode::Ind => {
+            let lo = bus.read(pc + 1) as u16;
+            let hi = bus.read(pc + 2) as u16;
+            format!("(${:04X})", (hi << 8) | lo)
+        }
+        AddrMode::XInd => {
+            let zp = bus.read(pc + 1);
+            format!("(${:02X},X)", zp)
+        }
+        AddrMode::IndY => {
+            let zp = bus.read(pc + 1);
+            format!("(${:02X}),Y", zp)
+        }
+        AddrMode::Rel => {
+            let offset = bus.read(pc + 1) as i8;
+            let target = pc.wrapping_add(2).wrapping_add(offset as i16 as u16);
+            format!("${:04X}", target)
+        }
+    }
+}
+
+/// Main disassembler entry point
+pub fn disassemble(bus: &impl Bus, pc: u16) -> Disassembled {
+    let opcode = bus.read(pc);
+    let info = OPCODES[opcode as usize];
+
+    let mut bytes = Vec::new();
+    for i in 0..info.size {
+        bytes.push(bus.read(pc + i as u16));
     }
 
-    let operand = if info.size > 1 {
-        format_operand(info.mode, &bytes[1..])
-    } else {
-        "".into()
-    };
+    let operand = fmt_operand(bus, pc, &info);
 
-    let hex_dump = match info.size {
-        1 => format!("{:02X}      ", bytes[0]),
-        2 => format!("{:02X} {:02X}   ", bytes[0], bytes[1]),
-        3 => format!("{:02X} {:02X} {:02X}", bytes[0], bytes[1], bytes[2]),
-        _ => unreachable!(),
-    };
-
-    format!("{:04X}  {}  {} {}", pc, hex_dump, info.mnemonic, operand)
+    Disassembled {
+        addr: pc,
+        bytes,
+        mnemonic: info.mnemonic.into(),
+        operand,
+        size: info.size,
+        next_pc: pc.wrapping_add(info.size as u16),
+    }
 }
